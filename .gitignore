@@ -1,0 +1,52 @@
+# 依赖与构建产物
+node_modules/
+vendor/
+bower_components/
+.pnp/
+.pnp.js
+dist/
+build/
+out/
+target/
+*.egg-info/
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+.env
+.env.*
+
+# IDE 与系统文件
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# 日志与缓存
+*.log
+logs/
+.cache/
+.npm/
+.yarn/
+
+# 大文件与压缩包
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.rar
+*.7z
+*.dmg
+*.iso
+*.jar
+*.war
+*.class
+
+# 测试与覆盖率
+coverage/
+.nyc_output/
+htmlcov/
+.pytest_cache/
