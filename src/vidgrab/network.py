@@ -104,9 +104,9 @@ class RateLimiter:
         self._last_check: float = 0
         self._bytes_since_check: int = 0
 
-    async def wait_if_needed(self, bytes_read: int) -> None:
+    def _calculate_sleep(self, bytes_read: int) -> float:
         if self.bytes_per_second is None or self.bytes_per_second <= 0:
-            return
+            return 0
 
         self._bytes_since_check += bytes_read
         now = time.time()
@@ -115,14 +115,25 @@ class RateLimiter:
         if elapsed >= 1.0:
             self._last_check = now
             self._bytes_since_check = 0
-            return
+            return 0
 
         expected_time = self._bytes_since_check / self.bytes_per_second
         if expected_time > elapsed:
             sleep_time = expected_time - elapsed
-            await asyncio.sleep(sleep_time)
             self._last_check = time.time()
             self._bytes_since_check = 0
+            return sleep_time
+        return 0
+
+    async def wait_if_needed(self, bytes_read: int) -> None:
+        sleep_time = self._calculate_sleep(bytes_read)
+        if sleep_time > 0:
+            await asyncio.sleep(sleep_time)
+
+    def wait_if_needed_sync(self, bytes_read: int) -> None:
+        sleep_time = self._calculate_sleep(bytes_read)
+        if sleep_time > 0:
+            time.sleep(sleep_time)
 
 
 def is_retryable_error(e: Exception) -> bool:

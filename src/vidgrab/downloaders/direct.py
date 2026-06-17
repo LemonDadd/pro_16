@@ -7,7 +7,7 @@ from rich.progress import Progress, TaskID
 
 from ..exceptions import DownloadError
 from ..models import DownloadTask, TaskStatus, VideoStream
-from ..network import NetworkConfig, create_sync_session, get_content_length, supports_range_requests
+from ..network import NetworkConfig, RateLimiter, create_sync_session, get_content_length, supports_range_requests
 from ..utils import atomic_move, logger
 
 
@@ -15,6 +15,7 @@ class DirectDownloader:
     def __init__(self, network_config: NetworkConfig):
         self.network_config = network_config
         self.session = create_sync_session(network_config)
+        self.rate_limiter = RateLimiter(network_config.rate_limit_bytes)
 
     def download(
         self,
@@ -76,6 +77,8 @@ class DirectDownloader:
                         f.write(chunk)
                         downloaded += len(chunk)
                         task.downloaded_bytes = downloaded
+
+                        self.rate_limiter.wait_if_needed_sync(len(chunk))
 
                         if progress and overall_task is not None:
                             progress.update(overall_task, completed=downloaded)

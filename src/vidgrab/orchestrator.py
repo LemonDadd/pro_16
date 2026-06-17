@@ -113,9 +113,11 @@ class DownloadOrchestrator:
             streams = self.sniff_webpage(url)
         return streams
 
-    def _find_incomplete_task(self, url: str) -> DownloadTask | None:
+    def _find_incomplete_task(self, url: str, output_dir: Path | None = None) -> DownloadTask | None:
         for task in DownloadTask.list_incomplete():
             if task.url == url and task.status not in (TaskStatus.COMPLETED, TaskStatus.ENCRYPTED):
+                if output_dir is not None and str(output_dir) != task.output_dir:
+                    continue
                 return task
         return None
 
@@ -156,7 +158,7 @@ class DownloadOrchestrator:
                 output_name = task.output_name
         else:
             if continue_task:
-                task = self._find_incomplete_task(url)
+                task = self._find_incomplete_task(url, output_dir)
                 if task:
                     logger.info(f"Resuming existing task: {task.id}")
                     return self.download(

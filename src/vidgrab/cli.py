@@ -3,6 +3,9 @@ from __future__ import annotations
 import json
 import os
 import sys
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
@@ -23,6 +26,7 @@ from .utils import (
     load_url_list,
     logger,
     parse_headers,
+    parse_rate_limit,
     print_tasks_table,
     setup_logging,
 )
@@ -135,6 +139,66 @@ def with_common_options(func):
     return func
 
 
+@dataclass
+class DownloadItem:
+    url: str
+    output_name: Optional[str]
+    index: int
+    total: int
+
+
+_print_lock = threading.Lock()
+
+
+def _download_single(
+    item: DownloadItem,
+    config: AppConfig,
+    actual_output_dir: Path,
+    quality: str,
+    merge_format: str,
+    keep_segments: bool,
+    dry_run: bool,
+    list_formats: bool,
+    continue_task: bool,
+) -> tuple[bool, Optional[DownloadTask], Optional[str]]:
+    orchestrator = DownloadOrchestrator(config)
+
+    with _print_lock:
+        console.print(f"[bold][{item.index}/{item.total}] Downloading: {item.url}[/bold]")
+        if item.output_name:
+            console.print(f"  Output name: {item.output_name}")
+
+    try:
+        task = orchestrator.download(
+            url=item.url,
+            output_dir=actual_output_dir,
+            output_name=item.output_name,
+            quality=quality,
+            merge=config.merge,
+            merge_format=merge_format,
+            keep_segments=keep_segments,
+            dry_run=dry_run,
+            list_formats=list_formats,
+            continue_task=continue_task,
+        )
+        success = task.status == TaskStatus.COMPLETED
+        return (success, task, None)
+    except EncryptedStreamError as e:
+        with _print_lock:
+            console.print(f"[bold red]{e}[/bold red]")
+        return (False, None, str(e))
+    except VidgrabError as e:
+        with _print_lock:
+            console.print(f"[bold red]Error: {e}[/bold red]")
+        return (False, None, str(e))
+    except KeyboardInterrupt:
+        raise
+    except Exception as e:
+        with _print_lock:
+            console.print(f"[bold red]Error: {e}[/bold red]")
+        return (False, None, str(e))
+
+
 @cli.command("download")
 @click.argument("url")
 @with_common_options
@@ -222,42 +286,71 @@ def cmd_batch(
 
     items = load_url_list(url_file)
     console.print(f"[bold]Loaded {len(items)} URLs from {url_file}[/bold]")
+    if parallel > 1:
+        console.print(f"[bold]Using {parallel} parallel downloads[/bold]")
     console.print()
 
-    orchestrator = DownloadOrchestrator(config)
+    download_items = [
+        DownloadItem(url=url, output_name=name, index=i, total=len(items))
+        for i, (url, name) in enumerate(items, 1)
+    ]
+
     success = 0
     failed = 0
 
-    for i, (url, name) in enumerate(items, 1):
-        console.print(f"[bold][{i}/{len(items)}] Downloading: {url}[/bold]")
-        if name:
-            console.print(f"  Output name: {name}")
+    try:
+        if parallel <= 1:
+            for item in download_items:
+                ok, _, _ = _download_single(
+                    item,
+                    config,
+                    actual_output_dir,
+                    quality,
+                    kwargs.get("merge_format", "mp4"),
+                    kwargs.get("keep_segments", False),
+                    kwargs.get("dry_run", False),
+                    kwargs.get("list_formats", False),
+                    kwargs.get("continue_task", False),
+                )
+                if ok:
+                    success += 1
+                else:
+                    failed += 1
+                console.print()
+        else:
+            with ThreadPoolExecutor(max_workers=parallel) as executor:
+                futures = {
+                    executor.submit(
+                        _download_single,
+                        item,
+                        config,
+                        actual_output_dir,
+                        quality,
+                        kwargs.get("merge_format", "mp4"),
+                        kwargs.get("keep_segments", False),
+                        kwargs.get("dry_run", False),
+                        kwargs.get("list_formats", False),
+                        kwargs.get("continue_task", False),
+                    ): item
+                    for item in download_items
+                }
 
-        try:
-            task = orchestrator.download(
-                url=url,
-                output_dir=actual_output_dir,
-                output_name=name,
-                quality=quality,
-                merge=config.merge,
-                merge_format=kwargs.get("merge_format", "mp4"),
-                keep_segments=kwargs.get("keep_segments", False),
-                dry_run=kwargs.get("dry_run", False),
-                list_formats=kwargs.get("list_formats", False),
-                continue_task=kwargs.get("continue_task", False),
-            )
-            if task.status == TaskStatus.COMPLETED:
-                success += 1
-        except EncryptedStreamError as e:
-            console.print(f"[bold red]{e}[/bold red]")
-            failed += 1
-        except VidgrabError as e:
-            console.print(f"[bold red]Error: {e}[/bold red]")
-            failed += 1
-        except KeyboardInterrupt:
-            console.print("\n[yellow]Batch download interrupted[/yellow]")
-            break
-        console.print()
+                for future in as_completed(futures):
+                    item = futures[future]
+                    try:
+                        ok, _, _ = future.result()
+                        if ok:
+                            success += 1
+                        else:
+                            failed += 1
+                    except KeyboardInterrupt:
+                        raise
+                    except Exception as e:
+                        failed += 1
+                        with _print_lock:
+                            console.print(f"[bold red]Error downloading {item.url}: {e}[/bold red]")
+    except KeyboardInterrupt:
+        console.print("\n[yellow]Batch download interrupted[/yellow]")
 
     console.print(f"[bold]Batch complete: {success} succeeded, {failed} failed[/bold]")
     if failed > 0:
@@ -297,42 +390,71 @@ def cmd_import(
                 items.append((item, None))
 
     console.print(f"[bold]Imported {len(items)} items from {queue_file}[/bold]")
+    if parallel > 1:
+        console.print(f"[bold]Using {parallel} parallel downloads[/bold]")
     console.print()
 
-    orchestrator = DownloadOrchestrator(config)
+    download_items = [
+        DownloadItem(url=url, output_name=name, index=i, total=len(items))
+        for i, (url, name) in enumerate(items, 1)
+    ]
+
     success = 0
     failed = 0
 
-    for i, (url, name) in enumerate(items, 1):
-        console.print(f"[bold][{i}/{len(items)}] Downloading: {url}[/bold]")
-        if name:
-            console.print(f"  Output name: {name}")
+    try:
+        if parallel <= 1:
+            for item in download_items:
+                ok, _, _ = _download_single(
+                    item,
+                    config,
+                    actual_output_dir,
+                    quality,
+                    kwargs.get("merge_format", "mp4"),
+                    kwargs.get("keep_segments", False),
+                    kwargs.get("dry_run", False),
+                    kwargs.get("list_formats", False),
+                    kwargs.get("continue_task", False),
+                )
+                if ok:
+                    success += 1
+                else:
+                    failed += 1
+                console.print()
+        else:
+            with ThreadPoolExecutor(max_workers=parallel) as executor:
+                futures = {
+                    executor.submit(
+                        _download_single,
+                        item,
+                        config,
+                        actual_output_dir,
+                        quality,
+                        kwargs.get("merge_format", "mp4"),
+                        kwargs.get("keep_segments", False),
+                        kwargs.get("dry_run", False),
+                        kwargs.get("list_formats", False),
+                        kwargs.get("continue_task", False),
+                    ): item
+                    for item in download_items
+                }
 
-        try:
-            task = orchestrator.download(
-                url=url,
-                output_dir=actual_output_dir,
-                output_name=name,
-                quality=quality,
-                merge=config.merge,
-                merge_format=kwargs.get("merge_format", "mp4"),
-                keep_segments=kwargs.get("keep_segments", False),
-                dry_run=kwargs.get("dry_run", False),
-                list_formats=kwargs.get("list_formats", False),
-                continue_task=kwargs.get("continue_task", False),
-            )
-            if task.status == TaskStatus.COMPLETED:
-                success += 1
-        except EncryptedStreamError as e:
-            console.print(f"[bold red]{e}[/bold red]")
-            failed += 1
-        except VidgrabError as e:
-            console.print(f"[bold red]Error: {e}[/bold red]")
-            failed += 1
-        except KeyboardInterrupt:
-            console.print("\n[yellow]Import download interrupted[/yellow]")
-            break
-        console.print()
+                for future in as_completed(futures):
+                    item = futures[future]
+                    try:
+                        ok, _, _ = future.result()
+                        if ok:
+                            success += 1
+                        else:
+                            failed += 1
+                    except KeyboardInterrupt:
+                        raise
+                    except Exception as e:
+                        failed += 1
+                        with _print_lock:
+                            console.print(f"[bold red]Error downloading {item.url}: {e}[/bold red]")
+    except KeyboardInterrupt:
+        console.print("\n[yellow]Import download interrupted[/yellow]")
 
     console.print(f"[bold]Import complete: {success} succeeded, {failed} failed[/bold]")
     if failed > 0:
