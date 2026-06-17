@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vidgrab"
+version = "0.1.0"
+description = "Batch download web videos from CLI: direct links, m3u8 playlists, with cookies, proxies, and resume support"
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [{ name = "vidgrab contributors" }]
+license = { text = "MIT" }
+dependencies = [
+    "click>=8.1.0",
+    "requests>=2.31.0",
+    "httpx>=0.25.0",
+    "socksio>=1.0.0",
+    "pyyaml>=6.0",
+    "rich>=13.7.0",
+    "tenacity>=8.2.0",
+    "m3u8>=3.5.0",
+]
+
+[project.optional-dependencies]
+sniff = ["playwright>=1.40.0"]
+dev = ["pytest>=7.0", "pytest-asyncio>=0.21.0"]
+
+[project.scripts]
+vidgrab = "vidgrab.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
