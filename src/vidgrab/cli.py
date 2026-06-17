@@ -188,6 +188,7 @@ def cmd_download(
             keep_segments=keep_segments,
             dry_run=dry_run,
             list_formats=list_formats,
+            continue_task=continue_task,
         )
     except EncryptedStreamError as e:
         console.print(f"[bold red]{e}[/bold red]")
@@ -243,6 +244,7 @@ def cmd_batch(
                 keep_segments=kwargs.get("keep_segments", False),
                 dry_run=kwargs.get("dry_run", False),
                 list_formats=kwargs.get("list_formats", False),
+                continue_task=kwargs.get("continue_task", False),
             )
             if task.status == TaskStatus.COMPLETED:
                 success += 1
@@ -317,6 +319,7 @@ def cmd_import(
                 keep_segments=kwargs.get("keep_segments", False),
                 dry_run=kwargs.get("dry_run", False),
                 list_formats=kwargs.get("list_formats", False),
+                continue_task=kwargs.get("continue_task", False),
             )
             if task.status == TaskStatus.COMPLETED:
                 success += 1
@@ -415,12 +418,12 @@ def cmd_resume(config: AppConfig, task_id: Optional[str]) -> None:
             continue
 
         console.print(f"[bold]Resuming: {task.title}[/bold]")
+        console.print(f"  Task ID: {task.id}")
+        console.print(f"  Progress: {len(task.segments_done)}/{task.total_segments} segments, {task.downloaded_bytes}/{task.total_bytes} bytes")
         try:
             orchestrator.download(
                 url=task.url,
-                output_dir=Path(task.output_dir),
-                output_name=task.output_name,
-                quality=task.selected_stream.quality,
+                existing_task=task,
                 merge=config.merge,
             )
         except KeyboardInterrupt:

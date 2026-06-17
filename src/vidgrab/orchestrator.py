@@ -113,6 +113,12 @@ class DownloadOrchestrator:
             streams = self.sniff_webpage(url)
         return streams
 
+    def _find_incomplete_task(self, url: str) -> DownloadTask | None:
+        for task in DownloadTask.list_incomplete():
+            if task.url == url and task.status not in (TaskStatus.COMPLETED, TaskStatus.ENCRYPTED):
+                return task
+        return None
+
     def _select_stream(self, streams: list[VideoStream], quality: str) -> VideoStream:
         if not streams:
             raise DownloadError("No streams available")
@@ -137,10 +143,38 @@ class DownloadOrchestrator:
         keep_segments: bool = False,
         dry_run: bool = False,
         list_formats: bool = False,
+        existing_task: DownloadTask | None = None,
+        continue_task: bool = False,
     ) -> DownloadTask:
-        output_dir = output_dir or self.config.output_dir
-        output_dir = Path(output_dir)
-        output_dir.mkdir(parents=True, exist_ok=True)
+        if existing_task is not None:
+            task = existing_task
+            url = task.url
+            output_dir = Path(task.output_dir)
+            output_name = task.output_name
+            quality = task.selected_stream.quality if task.selected_stream else quality
+            if task.selected_stream:
+                output_name = task.output_name
+        else:
+            if continue_task:
+                task = self._find_incomplete_task(url)
+                if task:
+                    logger.info(f"Resuming existing task: {task.id}")
+                    return self.download(
+                        url=url,
+                        output_dir=output_dir,
+                        output_name=output_name,
+                        quality=quality,
+                        merge=merge,
+                        merge_format=merge_format,
+                        keep_segments=keep_segments,
+                        dry_run=dry_run,
+                        list_formats=list_formats,
+                        existing_task=task,
+                    )
+
+            output_dir = output_dir or self.config.output_dir
+            output_dir = Path(output_dir)
+            output_dir.mkdir(parents=True, exist_ok=True)
 
         stream_type, streams = self.analyze_url(url)
 
@@ -151,6 +185,8 @@ class DownloadOrchestrator:
 
         if list_formats:
             print_streams_table(streams)
+            if existing_task:
+                return existing_task
             task = DownloadTask(url=url, output_dir=str(output_dir), output_name=output_name)
             task.status = TaskStatus.PENDING
             return task
@@ -160,6 +196,8 @@ class DownloadOrchestrator:
             console.print("[bold]Dry Run - Selected Stream:[/bold]")
             if selected:
                 print_streams_table([selected])
+            if existing_task:
+                return existing_task
             task = DownloadTask(url=url, output_dir=str(output_dir), output_name=output_name)
             task.selected_stream = selected
             task.title = URLRecognizer.extract_title(url)
@@ -175,14 +213,22 @@ class DownloadOrchestrator:
             from .exceptions import EncryptedStreamError
             raise EncryptedStreamError()
 
-        task = DownloadTask(
-            url=url,
-            output_dir=str(output_dir),
-            output_name=output_name,
-            filename_template=self.config.filename_template,
-            title=URLRecognizer.extract_title(url),
-        )
-        task.save()
+        if existing_task is None:
+            task = DownloadTask(
+                url=url,
+                output_dir=str(output_dir),
+                output_name=output_name,
+                filename_template=self.config.filename_template,
+                title=URLRecognizer.extract_title(url),
+            )
+            task.selected_stream = selected_stream
+            task.save()
+        else:
+            task = existing_task
+            if task.selected_stream is None:
+                task.selected_stream = selected_stream
+            task.status = TaskStatus.RUNNING
+            task.save()
 
         try:
             with create_progress() as progress:

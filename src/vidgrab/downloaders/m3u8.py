@@ -326,6 +326,30 @@ class M3U8Downloader:
         except FileNotFoundError as e:
             raise FFmpegError(f"ffmpeg not found at {self.ffmpeg_path}") from e
 
+    def _sync_segments_from_disk(self, task: DownloadTask, segments: list[M3U8Segment], seg_dir: Path) -> None:
+        if not seg_dir.exists():
+            return
+
+        existing_indices: set[int] = set(task.segments_done)
+
+        for seg in segments:
+            seg_path = seg_dir / f"seg_{seg.index:05d}.ts"
+            if seg_path.exists() and seg_path.stat().st_size > 0:
+                if seg.index not in existing_indices:
+                    existing_indices.add(seg.index)
+                    seg.size = seg_path.stat().st_size
+
+        task.segments_done = sorted(existing_indices)
+        task.downloaded_bytes = sum(
+            (seg_dir / f"seg_{idx:05d}.ts").stat().st_size
+            for idx in task.segments_done
+            if (seg_dir / f"seg_{idx:05d}.ts").exists()
+        )
+        task.save()
+
+        if len(task.segments_done) > 0:
+            logger.info(f"Found {len(task.segments_done)} existing segments on disk for task {task.id}")
+
     def download(
         self,
         task: DownloadTask,
@@ -341,11 +365,11 @@ class M3U8Downloader:
             raise EncryptedStreamError()
 
         task.status = TaskStatus.RUNNING
-        task.selected_stream = stream
+        if task.selected_stream is None:
+            task.selected_stream = stream
         task.save()
 
-        streams = self.parser.parse_master(stream.url)
-        selected_stream = self.select_stream(streams, quality) if len(streams) > 1 else stream
+        selected_stream = task.selected_stream if task.selected_stream else stream
 
         if selected_stream.is_encrypted:
             task.status = TaskStatus.ENCRYPTED
@@ -353,9 +377,25 @@ class M3U8Downloader:
             task.save()
             raise EncryptedStreamError()
 
-        segments = self.parser.parse_media(selected_stream.url)
-        task.total_segments = len(segments)
-        task.save()
+        if not selected_stream or selected_stream.stream_type != StreamType.M3U8 or not task.total_segments:
+            streams = self.parser.parse_master(selected_stream.url)
+            if len(streams) > 1:
+                selected_stream = self.select_stream(streams, quality)
+
+            if selected_stream.is_encrypted:
+                task.status = TaskStatus.ENCRYPTED
+                task.error = "Encrypted stream detected"
+                task.save()
+                raise EncryptedStreamError()
+
+            segments = self.parser.parse_media(selected_stream.url)
+            task.total_segments = len(segments)
+            task.save()
+        else:
+            segments = self.parser.parse_media(selected_stream.url)
+            if task.total_segments != len(segments):
+                task.total_segments = len(segments)
+                task.save()
 
         output_path = task.format_output_path(selected_stream)
         output_path = output_path.with_suffix(f".{merge_format}") if merge else output_path
@@ -363,6 +403,8 @@ class M3U8Downloader:
         seg_dir = output_path.parent / f".segments_{task.id}"
         concat_path = seg_dir / "concat.txt"
         seg_dir.mkdir(parents=True, exist_ok=True)
+
+        self._sync_segments_from_disk(task, segments, seg_dir)
 
         seg_task: TaskID | None = None
         if progress:

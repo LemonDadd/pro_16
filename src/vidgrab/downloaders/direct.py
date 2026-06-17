@@ -40,11 +40,18 @@ class DirectDownloader:
         supports_range = supports_range_requests(self.session, stream.url)
         downloaded = 0
 
-        if part_path.exists() and supports_range:
+        if task.downloaded_bytes > 0:
+            downloaded = task.downloaded_bytes
+            logger.debug(f"Resuming from task saved position: {downloaded} bytes")
+
+        if part_path.exists() and supports_range and downloaded == 0:
             downloaded = part_path.stat().st_size
             task.downloaded_bytes = downloaded
             task.save()
-            logger.debug(f"Resuming download from {downloaded} bytes")
+            logger.debug(f"Resuming from part file: {downloaded} bytes")
+
+        if downloaded > 0 and supports_range:
+            logger.info(f"Resuming download from {downloaded} bytes")
 
         headers = {}
         if downloaded > 0 and supports_range:
