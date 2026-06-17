@@ -51,22 +51,7 @@ class URLRecognizer:
 class DownloadOrchestrator:
     def __init__(self, config: AppConfig):
         self.config = config
-        self.network_config = self._build_network_config()
-
-    def _build_network_config(self) -> NetworkConfig:
-        cookies = self.config.get_cli("cookies")
-        headers = self.config.get_cli("headers", {})
-        profile_headers = self.config.get_cli("profile_headers", {})
-        all_headers = {**profile_headers, **headers}
-
-        return NetworkConfig.from_options(
-            cookie_file=cookies,
-            headers=all_headers,
-            proxy=self.config.proxy,
-            rate_limit_bytes=self.config.get_cli("rate_limit_bytes"),
-            timeout=30,
-            retries=3,
-        )
+        self.network_config = NetworkConfig.from_app_config(config)
 
     def analyze_url(self, url: str) -> tuple[StreamType, list[VideoStream]]:
         stream_type = URLRecognizer.recognize(url)
@@ -114,10 +99,16 @@ class DownloadOrchestrator:
         return streams
 
     def _find_incomplete_task(self, url: str, output_dir: Path | None = None) -> DownloadTask | None:
+        normalized_target_dir: str | None = None
+        if output_dir is not None:
+            normalized_target_dir = str(Path(output_dir).resolve())
+
         for task in DownloadTask.list_incomplete():
             if task.url == url and task.status not in (TaskStatus.COMPLETED, TaskStatus.ENCRYPTED):
-                if output_dir is not None and str(output_dir) != task.output_dir:
-                    continue
+                if normalized_target_dir is not None:
+                    normalized_task_dir = str(Path(task.output_dir).resolve()) if task.output_dir else ""
+                    if normalized_target_dir != normalized_task_dir:
+                        continue
                 return task
         return None
 

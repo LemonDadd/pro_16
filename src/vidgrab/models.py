@@ -73,10 +73,11 @@ class DownloadTask:
     def save(self) -> None:
         DEFAULT_TASKS_DIR.mkdir(parents=True, exist_ok=True)
         self.updated_at = time.time()
+        normalized_output_dir = str(Path(self.output_dir).resolve()) if self.output_dir else self.output_dir
         data = {
             "id": self.id,
             "url": self.url,
-            "output_dir": self.output_dir,
+            "output_dir": normalized_output_dir,
             "output_name": self.output_name,
             "filename_template": self.filename_template,
             "title": self.title,
@@ -105,7 +106,7 @@ class DownloadTask:
         task = cls(
             id=data["id"],
             url=data["url"],
-            output_dir=data["output_dir"],
+            output_dir=str(Path(data["output_dir"]).resolve()) if data.get("output_dir") else "",
             output_name=data.get("output_name"),
             filename_template=data.get("filename_template", "{title}_{quality}.{ext}"),
             title=data.get("title", "video"),

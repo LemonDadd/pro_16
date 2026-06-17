@@ -110,7 +110,7 @@ class AppConfig:
             self.rate_limit = profile.rate_limit
 
         self._cli_overrides["cookies"] = profile.cookies
-        self._cli_overrides["headers"] = profile.headers
+        self._cli_overrides["profile_headers"] = profile.headers
 
     def apply_cli_overrides(self, **overrides: Any) -> None:
         for key, value in overrides.items():

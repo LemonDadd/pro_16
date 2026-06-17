@@ -15,7 +15,7 @@ from tenacity import (
 )
 
 from .exceptions import NetworkError
-from .utils import logger, parse_netscape_cookies
+from .utils import logger, parse_netscape_cookies, parse_rate_limit
 
 
 @dataclass
@@ -39,8 +39,6 @@ class NetworkConfig:
         timeout: int = 30,
         retries: int = 3,
     ) -> "NetworkConfig":
-        from .utils import parse_rate_limit
-
         config = cls(
             headers=headers or {},
             proxy=proxy,
@@ -60,6 +58,28 @@ class NetworkConfig:
             config.headers["User-Agent"] = config.user_agent
 
         return config
+
+    @classmethod
+    def from_app_config(cls, config: "AppConfig") -> "NetworkConfig":
+        from .config import AppConfig
+
+        cookies = config.get_cli("cookies")
+        cli_headers = config.get_cli("headers", {})
+        profile_headers = config.get_cli("profile_headers", {})
+        all_headers = {**profile_headers, **cli_headers}
+
+        rate_limit_bytes = config.get_cli("rate_limit_bytes")
+        if rate_limit_bytes is None and config.rate_limit:
+            rate_limit_bytes = parse_rate_limit(config.rate_limit)
+
+        return cls.from_options(
+            cookie_file=cookies,
+            headers=all_headers,
+            proxy=config.proxy,
+            rate_limit_bytes=rate_limit_bytes,
+            timeout=30,
+            retries=3,
+        )
 
     def to_httpx_client_kwargs(self) -> dict[str, Any]:
         kwargs: dict[str, Any] = {
