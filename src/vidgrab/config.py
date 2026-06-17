@@ -72,9 +72,12 @@ class AppConfig:
 
             if "profiles" in data and isinstance(data["profiles"], dict):
                 for name, profile_data in data["profiles"].items():
+                    headers = profile_data.get("headers")
+                    if headers is None:
+                        headers = profile_data.get("header", {})
                     config.profiles[name] = ProfileConfig(
                         cookies=os.path.expanduser(profile_data["cookies"]) if profile_data.get("cookies") else None,
-                        headers=profile_data.get("headers", {}),
+                        headers=headers,
                         proxy=profile_data.get("proxy"),
                         output_dir=os.path.expanduser(profile_data["output_dir"]) if profile_data.get("output_dir") else None,
                         filename_template=profile_data.get("filename_template"),

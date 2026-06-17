@@ -14,7 +14,7 @@ import click
 from . import __version__
 from .config import AppConfig
 from .exceptions import EncryptedStreamError, VidgrabError
-from .models import DownloadTask, TaskStatus
+from .models import DownloadTask, StreamType, TaskStatus
 from .network import NetworkConfig
 from .orchestrator import DownloadOrchestrator
 from .sniff import WebSniffer
@@ -66,30 +66,39 @@ def cmd_doctor(config: AppConfig) -> None:
     console.print("[bold]vidgrab Doctor[/bold]")
     console.print()
 
-    all_ok = True
+    errors = []
 
     console.print("[bold]1. ffmpeg check:[/bold]")
     ffmpeg_ok, ffmpeg_msg = check_ffmpeg(config.ffmpeg_path)
-    console.print(f"   {'[green]✓[/green]' if ffmpeg_ok else '[red]✗[/red]'} {ffmpeg_msg}")
-    all_ok = all_ok and ffmpeg_ok
+    if ffmpeg_ok:
+        console.print(f"   [green]✓[/green] {ffmpeg_msg}")
+    else:
+        console.print(f"   [yellow]![/yellow] {ffmpeg_msg}")
+        console.print("     [yellow]Direct downloads work, but m3u8 merging requires ffmpeg.[/yellow]")
 
     console.print()
     console.print("[bold]2. CA certificates check:[/bold]")
     ca_ok, ca_msg = check_ca_certificates()
     console.print(f"   {'[green]✓[/green]' if ca_ok else '[red]✗[/red]'} {ca_msg}")
-    all_ok = all_ok and ca_ok
+    if not ca_ok:
+        errors.append(f"CA certificates: {ca_msg}")
 
     console.print()
     console.print("[bold]3. Output directory check:[/bold]")
     disk_ok, disk_msg = check_disk_writable(config.output_dir)
     console.print(f"   {'[green]✓[/green]' if disk_ok else '[red]✗[/red]'} {disk_msg}")
-    all_ok = all_ok and disk_ok
+    if not disk_ok:
+        errors.append(f"Output directory: {disk_msg}")
 
     console.print()
-    if all_ok:
-        console.print("[bold green]✓ All checks passed![/bold green]")
+    if not errors:
+        console.print("[bold green]✓ All critical checks passed![/bold green]")
+        if not ffmpeg_ok:
+            console.print("[yellow]  (ffmpeg is recommended for m3u8 merging)[/yellow]")
     else:
-        console.print("[bold yellow]! Some checks failed. See above for details.[/bold yellow]")
+        console.print("[bold red]✗ Some critical checks failed:[/bold red]")
+        for e in errors:
+            console.print(f"  [red]•[/red] {e}")
         sys.exit(1)
 
 
@@ -500,12 +509,23 @@ def cmd_sniff(
         sniffer.close()
 
     if download and streams:
+        m3u8_streams = [s for s in streams if s.stream_type == StreamType.M3U8]
+        direct_streams = [s for s in streams if s.stream_type == StreamType.DIRECT]
+        if m3u8_streams:
+            best_stream = m3u8_streams[0]
+            console.print(f"[green]Selected m3u8 stream (will pick highest quality internally):[/green] {best_stream.url}")
+        elif direct_streams:
+            best_stream = direct_streams[0]
+            console.print(f"[green]Selected direct stream:[/green] {best_stream.url}")
+        else:
+            best_stream = streams[0]
+
         apply_common_options(config, output_dir=output_dir, cookies=cookies, headers=headers, proxy=proxy)
         orchestrator = DownloadOrchestrator(config)
         actual_output_dir = Path(output_dir) if output_dir else config.output_dir
 
         orchestrator.download(
-            url=streams[0].url,
+            url=best_stream.url,
             output_dir=actual_output_dir,
             quality=quality,
             merge=config.merge,
